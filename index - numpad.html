@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <!-- SECURITY PATCH START: Content Security Policy -->
+    <meta http-equiv="Content-Security-Policy" content="
+        default-src 'self';
+        script-src 'self' https://cdn.jsdelivr.net https://cdn.tailwindcss.com 'unsafe-eval';
+        worker-src 'self' blob:;
+        style-src 'self' 'unsafe-inline';
+        connect-src 'self' https://cdn.jsdelivr.net data:;
+        img-src 'self' blob:;
+        object-src 'none';
+        base-uri 'self';
+        frame-ancestors 'none';
+    ">
+    <!-- SECURITY PATCH END: Content Security Policy -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NumPad OCR Calculator</title>
+    <!-- SECURITY PATCH START: Subresource Integrity (SRI) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src='https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/tesseract.min.js' integrity="sha384-llrj4SUC221pVa/E3xKZwmp2zd8q9ReUcs9N37u6A5pQhjiymLsQRg+1AysLVKOZ" crossorigin="anonymous" defer></script>
+    <!-- SECURITY PATCH END: Subresource Integrity (SRI) -->
+    <style>
+        body {
+            touch-action: none;
+        }
+        .grid-bg {
+            background-image:
+                linear-gradient(rgba(0, 0, 0, 0.1) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 0, 0, 0.1) 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+        .draggable {
+            touch-action: none;
+            user-select: none;
+            position: absolute;
+            cursor: grab;
+            transition: transform 0.2s, box-shadow 0.2s;
+            z-index: 50; /* Ensure newly created blocks are on top */
+        }
+        .group-container {
+            z-index: 50; /* draggable 要素と同じ z-index に設定し、子要素が表示されるようにする */
+        }
+        .dragging {
+            cursor: grabbing;
+            transform: scale(1.1);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2), 0 4px 6px -2px rgba(0, 0, 0, 0.1);
+            z-index: 1000;
+        }
+
+        .result-display {
+            position: absolute;
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #16a34a; /* green-600 */
+        }
+
+            /* New styles for layout */
+        .source-number-item {
+            @apply flex items-center justify-center bg-white rounded-lg shadow-md p-4 text-2xl font-mono cursor-grab hover:shadow-lg transition;
+        }
+        /* グループからの子ブロック離脱の視覚的フィードバック */
+        .ungroup-potential {
+            @apply border-red-300; /* グループ解消の可能性があることを示す薄い赤色の枠線 */
+        }
+        .ungroup-active {
+            @apply border-red-500 ring-2 ring-red-500; /* 離脱が確定的な場合に強調する赤色の枠線とリング */
+        }
+        /* 選択されたブロックのスタイル */
+        .draggable.selected {
+            @apply ring-2 ring-blue-500 border-blue-300 bg-blue-50;
+        }
+        .group-drop-target {
+            @apply ring-4 ring-purple-400 bg-purple-200/70;
+        }
+        .custom-context-menu {
+            position: absolute;
+            background-color: white;
+            border: 1px solid #ddd;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.15);
+            border-radius: 5px;
+            z-index: 10000;
+            padding: 5px 0;
+        }
+        .custom-context-menu-item {
+            padding: 8px 15px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .custom-context-menu-item:hover {
+            background-color: #f5f5f5;
+        }
+        /* SECURITY PATCH START: DoS Protection - UI Notification Style */
+        .security-notifier {
+            position: fixed;
+            top: 80px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: #ef4444; /* red-500 */
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 16px;
+            z-index: 10001;
+            opacity: 0;
+            transition: opacity 0.5s ease-in-out;
+        }
+        /* SECURITY PATCH END: DoS Protection - UI Notification Style */
+    </style>
+</head>
+<body class="bg-gray-100 flex flex-col h-screen font-sans">
+    <header class="bg-white shadow p-4 z-10">
+        <div class="container mx-auto flex justify-between items-center">
+            <h1 class="text-2xl font-bold text-gray-800">NumPad OCR Calculator</h1>
+            <div class="flex items-center space-x-4">
+                <input type="file" id="imageUpload" accept="image/*" class="hidden">
+                <button id="uploadButton" class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition">画像をアップロード</button>
+
+
+                 <div id="status" class="text-gray-600 font-medium hidden">
+                    <div class="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-500 mr-2"></div>
+                    <span>OCRワーカーを初期化中...</span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <div class="flex flex-grow overflow-hidden">
+        <!-- 数値一覧エリア (左側) -->
+        <aside id="source-list" class="w-1/5 bg-gray-200 p-4 shadow-inner overflow-y-auto relative">
+            <h2 class="text-lg font-semibold mb-3 text-gray-700">数値一覧 (ソース & ゴミ箱)</h2>
+            <p class="text-sm text-gray-600 mb-4">ここからドラッグして数値を生成。ここへドロップで削除。</p>
+            <div id="ocr-numbers" class="space-y-2">
+                <!-- OCRで抽出された数値がここに追加される -->
+            </div>
+            
+            <!-- 新規追加UI -->
+            <div class="mt-4 p-3 bg-gray-50 rounded-lg shadow-inner">
+                <h3 class="text-md font-semibold mb-2 text-gray-700">数値の追加・編集</h3>
+                <input type="text" id="addNumberInput" placeholder="新しい数値を入力" class="w-full p-2 border border-gray-300 rounded-md mb-2 text-xl font-mono">
+                <button id="addNumberButton" class="w-full px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 transition">リストに追加</button>
+            </div>
+        </aside>
+
+        <!-- キャンバスエリア (中央) -->
+        <main id="canvas" class="flex-grow relative grid-bg overflow-hidden">
+            <!-- Draggable blocks will be injected here -->
+        </main>
+    </div>
+
+    <!-- 演算子パレット (下部) -->
+    <footer id="operator-palette" class="bg-gray-200 p-4 shadow-inner">
+        <div class="container mx-auto flex justify-center items-center space-x-4">
+            <p class="text-gray-700 font-semibold mr-4">演算子パレット:</p>
+            <div data-value="+" class="operator-source bg-white rounded-lg shadow-md p-4 text-2xl font-bold cursor-grab hover:bg-blue-500 transition">+</div>
+            <div data-value="-" class="operator-source bg-white rounded-lg shadow-md p-4 text-2xl font-bold cursor-grab hover:bg-blue-500 transition">-</div>
+            <div data-value="*" class="operator-source bg-white rounded-lg shadow-md p-4 text-2xl font-bold cursor-grab hover:bg-blue-500 transition">×</div>
+            <div data-value="/" class="operator-source bg-white rounded-lg shadow-md p-4 text-2xl font-bold cursor-grab hover:bg-blue-500 transition">÷</div>
+        </div>
+    </footer>
+    <script src="numpad.js" defer></script>
+    <!-- DEBUG CONSOLE START -->
+    <div id="debug-console" style="position: fixed; bottom: 0; left: 0; width: 100%; max-height: 200px; overflow-y: auto; background: rgba(0,0,0,0.8); color: #ff5555; font-family: monospace; font-size: 12px; z-index: 99999; padding: 10px; box-sizing: border-box; display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center; padding-bottom: 5px; border-bottom: 1px solid #555;">
+            <h4 style="color: white; margin: 0;">Error Log</h4>
+            <button id="clear-debug-console" style="background: #555; color: white; border: none; padding: 2px 8px; cursor: pointer;">Clear</button>
+        </div>
+        <pre id="debug-output" style="white-space: pre-wrap; margin-top: 5px;"></pre>
+    </div>
+    <!-- DEBUG CONSOLE END -->
+</body>
+</html>
